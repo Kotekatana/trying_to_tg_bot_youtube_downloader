@@ -18,7 +18,6 @@ public class FileDownloadController {
     public String sendHello(){
       return "hello WORld";
     };
-
     @GetMapping("/downloadFile/{fileCode}")
     public ResponseEntity<?> downloadFile(@PathVariable("fileCode") String fileCode) {
         FileDownloadUtil downloadUtil = new FileDownloadUtil();

@@ -1,27 +1,24 @@
 package com.tgbots.prodavan.service;
 
 import com.github.kiulian.downloader.YoutubeDownloader;
-import com.github.kiulian.downloader.downloader.YoutubeCallback;
 import com.github.kiulian.downloader.downloader.YoutubeProgressCallback;
 import com.github.kiulian.downloader.downloader.request.RequestVideoFileDownload;
 import com.github.kiulian.downloader.downloader.request.RequestVideoInfo;
 import com.github.kiulian.downloader.downloader.response.Response;
 import com.github.kiulian.downloader.model.videos.VideoInfo;
 import com.github.kiulian.downloader.model.videos.formats.AudioFormat;
-import com.github.kiulian.downloader.model.videos.formats.Format;
 import com.github.kiulian.downloader.model.videos.formats.VideoFormat;
 import com.github.kiulian.downloader.model.videos.formats.VideoWithAudioFormat;
 import com.tgbots.prodavan.config.BotConfig;
 import com.tgbots.prodavan.model.User;
 import com.tgbots.prodavan.repositories.UserRepository;
-
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Component;
 import org.telegram.telegrambots.bots.TelegramLongPollingBot;
 import org.telegram.telegrambots.meta.api.methods.commands.SetMyCommands;
-import org.telegram.telegrambots.meta.api.methods.send.SendDocument;
 import org.telegram.telegrambots.meta.api.methods.send.SendMessage;
-import org.telegram.telegrambots.meta.api.methods.send.SendVideo;
+import org.telegram.telegrambots.meta.api.methods.updatingmessages.DeleteMessage;
+import org.telegram.telegrambots.meta.api.methods.updatingmessages.EditMessageReplyMarkup;
 import org.telegram.telegrambots.meta.api.objects.Chat;
 import org.telegram.telegrambots.meta.api.objects.InputFile;
 import org.telegram.telegrambots.meta.api.objects.Message;
@@ -33,15 +30,17 @@ import org.telegram.telegrambots.meta.api.objects.replykeyboard.buttons.InlineKe
 import org.telegram.telegrambots.meta.exceptions.TelegramApiException;
 
 import java.io.File;
-import java.util.ArrayList;
-import java.util.List;
+import java.util.*;
+import java.util.stream.Collectors;
 
 @Component
 public class TelegramBot  extends TelegramLongPollingBot {
+    private Ffmpeg ffmpeg = new Ffmpeg();
 
     @Autowired
     private UserRepository userRepository;
     private YoutubeDownloader downloader = new YoutubeDownloader();
+    private YoutubeService youtubeService = new YoutubeService();
     final BotConfig config;
     public TelegramBot(BotConfig config){
         this.config = config;
@@ -79,12 +78,14 @@ public class TelegramBot  extends TelegramLongPollingBot {
                 switch (messageText){
                     case "/start":
                         startCommandReceived(chatId,update.getMessage().getChat().getUserName());
+                        break;
+                    case "/test":
+                        break;
                 }
             }
         }else if(update.hasCallbackQuery()){
-            String data = update.getCallbackQuery().getData();
-            System.out.println(data);
-            downloadVideo(data.split("&")[0],data.split("&")[1],update.getCallbackQuery().getMessage().getChatId());
+
+            downloadVideo(update);
         }
     }
     private void startCommandReceived(long chatId, String name){
@@ -104,122 +105,59 @@ public class TelegramBot  extends TelegramLongPollingBot {
                     .userName(chat.getUserName())
                     .build();
 
-
             userRepository.save(user);
         }
     }
 
-    private void sendVideoQuality(String messageText,Long chatId){
+
+    private void sendVideoQuality(String messageText, Long chatId){
+        String videoId = messageText.split("=")[1];
         SendMessage message = new SendMessage();
         message.setChatId(chatId);
+        InlineKeyboardMarkup inlineKeyboardMarkup = new InlineKeyboardMarkup();
+        List<InlineKeyboardButton> keyboardButtonsRow = new ArrayList<>();
+        SortedSet<Integer> quality = new TreeSet<>();
+        youtubeService.getVideoInfo(videoId).videoFormats().forEach(videoFormat -> quality.add(videoFormat.height()));
 
-        String videoId = messageText.split("=")[1];
-        RequestVideoInfo request = new RequestVideoInfo(videoId)
-                .callback(new YoutubeCallback<VideoInfo>() {
-                    @Override
-                    public void onFinished(VideoInfo videoInfo) {
-                        System.out.println("Finished parsing");
-                    }
-
-                    @Override
-                    public void onError(Throwable throwable) {
-                        message.setText("Oops, something went wrong...");
-                        try {
-                            execute(message);
-                        } catch (TelegramApiException e) {
-                            throw new RuntimeException(e);
-                        }
-                        System.out.println("Error: " + throwable.getMessage());
-                    }
-                })
-                .async();
-        Response<VideoInfo> response = downloader.getVideoInfo(request);
-        VideoInfo video = response.data();
-        if(video==null){
-            sendMessage(chatId,"Oops,something went wrong...");
-        }else{
-            List<VideoWithAudioFormat> videoWithAudioFormats = video.videoWithAudioFormats();
-            InlineKeyboardMarkup inlineKeyboardMarkup = new InlineKeyboardMarkup();
-            List<InlineKeyboardButton> keyboardButtonsRow = new ArrayList<>();
-
-            for (VideoWithAudioFormat it: videoWithAudioFormats) {
-                InlineKeyboardButton oneButton = new InlineKeyboardButton();
-                oneButton.setText(it.videoQuality().toString());
-                oneButton.setCallbackData(videoId+"&"+it.videoQuality().toString());
-                keyboardButtonsRow.add(oneButton);
-            }
-            List<List<InlineKeyboardButton>> rowList = new ArrayList<>();
-            rowList.add(keyboardButtonsRow);
-            inlineKeyboardMarkup.setKeyboard(rowList);
-
-            message.setReplyMarkup(inlineKeyboardMarkup);
-            message.setText("Select quality");
-            try {
-                execute(message);
-            } catch (TelegramApiException e) {
-                throw new RuntimeException(e);
-            }
+        quality.stream().filter(q -> q >= 360).toList().forEach(q -> {
+            InlineKeyboardButton resButton = new InlineKeyboardButton();
+            resButton.setText(q.toString());
+            resButton.setCallbackData(videoId+"&"+q);
+            keyboardButtonsRow.add(resButton);
+        });
+        List<List<InlineKeyboardButton>> rowList = new ArrayList<>();
+        rowList.add(keyboardButtonsRow);
+        inlineKeyboardMarkup.setKeyboard(rowList);
+        message.setReplyMarkup(inlineKeyboardMarkup);
+        message.setText("Select resolution");
+        try {
+            execute(message);
+        } catch (TelegramApiException e) {
+            throw new RuntimeException(e);
         }
-
     }
-    private  void downloadVideo(String videoId,String videoQuality,Long chatId){
-        RequestVideoInfo request = new RequestVideoInfo(videoId);
-        Response<VideoInfo> response = downloader.getVideoInfo(request);
-        VideoInfo video = response.data();
-        List<VideoWithAudioFormat> videoWithAudioFormats = video.videoWithAudioFormats();
-        List<VideoFormat> videoFormats = video.videoFormats();
-        for (VideoFormat videoFormat:videoFormats) {
-            System.out.println(videoFormat.videoQuality()+" "+videoFormat.url());
-        }
-        System.out.println("==============================");
-        List<AudioFormat> audioFormats = video.audioFormats();
-        for (AudioFormat audioFormat:audioFormats) {
-            System.out.println(audioFormat.audioSampleRate().toString()+" " + audioFormat.averageBitrate()+ " "+audioFormat.audioQuality()+" "+audioFormat.url());
-        }
+    private void downloadVideo(Update data){
 
-        File outputDir = new File("my_videos");
-        Format format = videoWithAudioFormats.stream().filter(it->it.videoQuality().toString().equals(videoQuality)).findFirst().orElse(null);
+        String videoId = data.getCallbackQuery().getData().split("&")[0];
+        String videoQuality = data.getCallbackQuery().getData().split("&")[1];
+        Long chatId = data.getCallbackQuery().getMessage().getChatId();
+        Integer keyboardId = data.getCallbackQuery().getMessage().getMessageId();
+        String filename = "merged_"+videoId+"_"+videoQuality+".mp4";
+        String output = "D:/Users/Артем/Desktop/prodavan/merged/"+filename;
+        ffmpeg.mergeVA(youtubeService.downloadVideo(videoId,videoQuality),youtubeService.downloadAudio(videoId),output);
+        System.out.println("Nice!");
 
-        if(format == null){
 
+        EditMessageReplyMarkup editMessageReplyMarkup = new EditMessageReplyMarkup();
+        editMessageReplyMarkup.setChatId(chatId);
+        editMessageReplyMarkup.setMessageId(keyboardId);
+        try {
+            execute(editMessageReplyMarkup);
+        } catch (TelegramApiException e) {
+            throw new RuntimeException(e);
         }
-//        RequestVideoFileDownload videorequest = new RequestVideoFileDownload(format)
-//                .saveTo(outputDir) // by default "videos" directory
-//                .renameTo(videoId+videoQuality)
-//                .overwriteIfExists(true)
-//                .callback(new YoutubeProgressCallback<File>() {
-//                    @Override
-//                    public void onDownloading(int progress) {
-//                        System.out.printf("Downloaded %d%%\n", progress);
-//                    }
-//
-//                    @Override
-//                    public void onFinished(File videoInfo) {
-//
-//                        System.out.println("Finished file: " + videoInfo);
-//                    }
-//
-//                    @Override
-//                    public void onError(Throwable throwable) {
-//                        System.out.println("Error: " + throwable.getLocalizedMessage());
-//                    }
-//                })
-//                .async();
-//
-//        Response<File> videoResponse = downloader.downloadVideoFile(videorequest);
-//        File data = videoResponse.data();
-//        InputFile inputFile = new InputFile(data);
-//        SendDocument sendDocument = new SendDocument();
-//        sendDocument.setDocument(inputFile);
-//        sendDocument.setChatId(chatId);
-//        SendVideo sendVideo = new SendVideo();
-//        sendVideo.setChatId(chatId);
-//        sendVideo.setVideo(inputFile);
-//        try {
-//            execute(sendDocument);
-//        } catch (TelegramApiException e) {
-//            throw new RuntimeException(e);
-//        }
+        sendMessage(chatId,"http://downloader.ddns.net:5555/downloadFile/"+filename);
+
     }
     private void sendMessage(long chatId,String textToSend){
         SendMessage message = new SendMessage();

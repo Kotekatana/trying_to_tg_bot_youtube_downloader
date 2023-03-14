@@ -8,24 +8,26 @@ import com.github.kiulian.downloader.downloader.request.RequestVideoInfo;
 import com.github.kiulian.downloader.downloader.response.Response;
 import com.github.kiulian.downloader.model.videos.VideoDetails;
 import com.github.kiulian.downloader.model.videos.VideoInfo;
+import com.github.kiulian.downloader.model.videos.formats.AudioFormat;
 import com.github.kiulian.downloader.model.videos.formats.Format;
+import com.github.kiulian.downloader.model.videos.formats.VideoFormat;
 import com.github.kiulian.downloader.model.videos.formats.VideoWithAudioFormat;
 import org.springframework.stereotype.Service;
 
 import java.io.File;
-import java.util.ArrayList;
-import java.util.List;
+import java.util.*;
+import java.util.stream.Collectors;
 
 @Service
 public class YoutubeService {
     YoutubeDownloader downloader = new YoutubeDownloader();
-    List<String> getVideoQuality(String videoId){
-        List<String> quality = new ArrayList<>();
+    HashMap<String,VideoInfo> videos = new HashMap<>();
+    VideoInfo getVideoInfo(String videoId){
         RequestVideoInfo request = new RequestVideoInfo(videoId)
                 .callback(new YoutubeCallback<VideoInfo>() {
                     @Override
                     public void onFinished(VideoInfo videoInfo) {
-                        System.out.println("Finished parsing");
+                        videos.put(videoId,videoInfo);
                     }
 
                     @Override
@@ -34,27 +36,16 @@ public class YoutubeService {
                     }
                 })
                 .async();
-        Response<VideoInfo> response = downloader.getVideoInfo(request);
-        VideoInfo video = response.data(); // will block thread
-        // get videos formats only with audio
-        List<VideoWithAudioFormat> videoWithAudioFormats = video.videoWithAudioFormats();
-        videoWithAudioFormats.forEach(it -> {
-            quality.add(it.videoQuality().toString());
-        });
-      return quality;
-    };
-    void downloadVideo(String videoId,String videoQuality){
-        RequestVideoInfo request = new RequestVideoInfo(videoId);
-        Response<VideoInfo> response = downloader.getVideoInfo(request);
-        VideoInfo video = response.data();
-        List<VideoWithAudioFormat> videoWithAudioFormats = video.videoWithAudioFormats();
-
+        return downloader.getVideoInfo(request).data();
+    }
+    VideoInfo getVideoInfoById(String videoId){
+        return videos.get(videoId);
+    }
+    String downloadVideo(String videoId,String videoQuality){
         File outputDir = new File("my_videos");
-        Format format = videoWithAudioFormats.stream().filter(it->it.videoQuality().toString().equals(videoQuality)).findFirst().orElse(null);
-
-        RequestVideoFileDownload videorequest = new RequestVideoFileDownload(format)
+        RequestVideoFileDownload videorequest = new RequestVideoFileDownload(getVideoInfoById(videoId).videoFormats().stream().filter(videoFormat -> videoFormat.height().toString().equals(videoQuality)).findFirst().orElse(null))
                 .saveTo(outputDir) // by default "videos" directory
-                .renameTo(videoId+videoQuality)
+                .renameTo(videoId+"_"+videoQuality)
                 .overwriteIfExists(true)
                 .callback(new YoutubeProgressCallback<File>() {
                     @Override
@@ -64,6 +55,34 @@ public class YoutubeService {
 
                     @Override
                     public void onFinished(File videoInfo) {
+
+                        System.out.println("Finished file: " + videoInfo);
+                    }
+
+                    @Override
+                    public void onError(Throwable throwable) {
+                        System.out.println("Error: " + throwable.getLocalizedMessage());
+                    }
+                })
+        .async();
+        Response<File> videoResponse = downloader.downloadVideoFile(videorequest);
+        return videoResponse.data().getAbsolutePath();
+    }
+    String downloadAudio(String videoId){
+        File outputDir = new File("my_audios");
+        RequestVideoFileDownload audiorequest = new RequestVideoFileDownload(getVideoInfoById(videoId).bestAudioFormat())
+                .saveTo(outputDir) // by default "videos" directory
+                .renameTo(videoId)
+                .overwriteIfExists(true)
+                .callback(new YoutubeProgressCallback<File>() {
+                    @Override
+                    public void onDownloading(int progress) {
+                        System.out.printf("Downloaded %d%%\n", progress);
+                    }
+
+                    @Override
+                    public void onFinished(File videoInfo) {
+
                         System.out.println("Finished file: " + videoInfo);
                     }
 
@@ -73,11 +92,11 @@ public class YoutubeService {
                     }
                 })
                 .async();
-        Response<File> videoResponse = downloader.downloadVideoFile(videorequest);
-        File data = videoResponse.data();
+        Response<File> audioResponse = downloader.downloadVideoFile(audiorequest);
+        return audioResponse.data().getAbsolutePath();
     }
 
-    public static void main(String[] args) {
+    public void main(String[] args) {
 //        YoutubeDownloader downloader = new YoutubeDownloader();
 //        String videoId = "4K5Fm-1ZYTY";
 //        RequestVideoInfo request = new RequestVideoInfo(videoId)
